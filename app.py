@@ -14,11 +14,12 @@ MODEL_ID_TO_REPO = {
 def setup_zk():
     """Setup ZooKeeper connection"""
     try:
+        print(f"Connecting to ZooKeeper at {ZK_HOST}")
         zk = KazooClient(hosts=ZK_HOST)
         zk.start()
         return zk
     except Exception as e:
-        st.error(f"Failed to connect to ZooKeeper: {e}")
+        st.error(f"Failed to connect to ZooKeeper on {ZK_HOST}: {e}")
         return None
 
 
@@ -59,6 +60,33 @@ def get_model_info(zk, path):
     return models
 
 
+def get_deployer_status(zk):
+    """Get the model deployer service status and IP"""
+    deployer_path = "/services/kube-model-deployer"
+    try:
+        if zk.exists(deployer_path):
+            data, stat = zk.get(deployer_path)
+            return {
+                "status": "Active",
+                "ip_address": data.decode("utf-8"),
+                "last_updated": datetime.fromtimestamp(stat.mtime / 1000).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            }
+        return {
+            "status": "Not Found",
+            "ip_address": "N/A",
+            "last_updated": "N/A",
+        }
+    except Exception as e:
+        logging.error(f"Error getting deployer status: {e}")
+        return {
+            "status": "Error",
+            "ip_address": "N/A",
+            "last_updated": "N/A",
+        }
+
+
 def display_model_table(zk, models, status, path):
     """Display a table of models with removal buttons"""
     if not models:
@@ -91,6 +119,82 @@ def display_model_table(zk, models, status, path):
     st.info(f"Found {len(models)} {status.lower()} models")
 
 
+def display_deployer_status(deployer_info):
+    """Display the model deployer service status"""
+    # Create a container with custom styling
+    container = st.container()
+    container.markdown(
+        """
+        <style>
+            [data-testid="stVerticalBlock"] div:has(> [data-testid="stVerticalBlock"]) {
+                background-color: #f8f9fa;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                border: 1px solid #e9ecef;
+                margin-bottom: 1rem;
+            }
+            .status-label {
+                font-size: 0.875rem;
+                color: #6c757d;
+                margin-bottom: 0.25rem;
+                font-weight: 400;
+            }
+            .status-value {
+                font-size: 1rem;
+                font-weight: 500;
+                color: #212529;
+            }
+        </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    with container:
+
+        # Create three columns with better proportions
+        status_col, ip_col, time_col = st.columns([1, 2, 2])
+
+        # Status indicator with improved styling
+        with status_col:
+            st.markdown('<p class="status-label">Status</p>', unsafe_allow_html=True)
+            if deployer_info["status"] == "Active":
+                st.markdown(
+                    '🟢 <span class="status-value">Active</span>',
+                    unsafe_allow_html=True,
+                )
+            elif deployer_info["status"] == "Not Found":
+                st.markdown(
+                    '🟡 <span class="status-value">Not Found</span>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '🔴 <span class="status-value">Error</span>', unsafe_allow_html=True
+                )
+
+        # IP Address with improved styling
+        with ip_col:
+            st.markdown(
+                '<p class="status-label">IP Address</p>', unsafe_allow_html=True
+            )
+            ip_display = deployer_info["ip_address"]
+            st.markdown(
+                f'<p class="status-value">{ip_display}</p>', unsafe_allow_html=True
+            )
+
+        # Last Updated with improved styling
+        with time_col:
+            st.markdown(
+                '<p class="status-label">Last Updated</p>', unsafe_allow_html=True
+            )
+            time_display = deployer_info["last_updated"]
+            st.markdown(
+                f'<p class="status-value">{time_display}</p>', unsafe_allow_html=True
+            )
+
+        # No closing div needed
+
+
 def main():
     logging.basicConfig(level=logging.INFO)
     st.set_page_config(page_title="Model Status Monitor", page_icon="🔍", layout="wide")
@@ -103,6 +207,13 @@ def main():
                 st.header("Controls")
                 if st.button("🔄 Refresh Data"):
                     st.rerun()
+
+            # Model Deployer Status
+            st.header("🚀 Model Deployer Status")
+            deployer_info = get_deployer_status(zk)
+            display_deployer_status(deployer_info)
+
+            st.markdown("---")
 
             # Warming Models
             st.header("🔸 Warming")
@@ -181,7 +292,7 @@ def main():
             zk.stop()
     else:
         st.error(
-            "Failed to connect to ZooKeeper. Please check if ZooKeeper is running on localhost:2181"
+            f"Failed to connect to ZooKeeper. Please check if ZooKeeper is running on {ZK_HOST}"
         )
 
 
