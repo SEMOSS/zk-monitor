@@ -1,0 +1,3 @@
+kazoo
+python-dotenv
+streamlit
