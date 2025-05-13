@@ -1,10 +1,18 @@
 import streamlit as st
+import os
 import logging
 import pandas as pd
 import json
 from kazoo.client import KazooClient
 from datetime import datetime
-from config import ZK_HOST
+from dotenv import load_dotenv
+
+st.cache_data.clear()
+st.cache_resource.clear()
+
+load_dotenv()
+
+ZK_HOST = os.getenv("ZK_HOST")
 
 
 def setup_zk():
@@ -237,6 +245,11 @@ def main():
 
             st.markdown("---")
 
+            # Cooling Models
+            st.header("❄️ Cooling")
+            cooling_models = get_model_info(zk, "/models/cooling")
+            display_model_table(zk, cooling_models, "Cooling", "/models/cooling")
+
             # Model Details
             st.header("📊 Model Details")
             tabs = st.tabs(["All Models", "Path Explorer"])
@@ -248,6 +261,9 @@ def main():
                     all_models.append(model)
                 for model in active_models:
                     model["status"] = "Active"
+                    all_models.append(model)
+                for model in cooling_models:
+                    model["status"] = "Cooling"
                     all_models.append(model)
 
                 if all_models:
@@ -266,7 +282,7 @@ def main():
                                 "Status",
                                 help="Current model status",
                                 width="medium",
-                                options=["Active", "Warming"],
+                                options=["Active", "Warming", "Cooling"],
                             ),
                             "last_updated": "Last Updated",
                         },
