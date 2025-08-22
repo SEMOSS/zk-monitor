@@ -40,8 +40,6 @@ jobs:
           ls -lah
           pwd
           echo ${{ secrets.DOCKER_PASS}} | docker login ${{ vars.DOCKER_PRIVATE }} -u ${{ secrets.DOCKER_USER}} --password-stdin
-          echo ${{ secrets.SEMOSS_DOCKER_PASS}} | docker login ${{ vars.DOCKER_SEMOSS }} -u ${{ secrets.SEMOSS_DOCKER_USER}} --password-stdin
           docker build . -t ${{ vars.DOCKER_PRIVATE }}/genai/zk-monitor:$date
-          docker tag ${{ vars.DOCKER_PRIVATE }}/genai/zk-monitor:$date ${{ vars.DOCKER_SEMOSS }}/genai/zk-monitor:$date
-          docker push ${{ vars.DOCKER_SEMOSS }}/genai/zk-monitor:$date
+          docker tag ${{ vars.DOCKER_PRIVATE }}/genai/zk-monitor
           docker push  ${{ vars.DOCKER_PRIVATE }}/genai/zk-monitor:$date
