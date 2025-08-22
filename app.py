@@ -1,14 +1,18 @@
 import streamlit as st
+import os
 import logging
 import pandas as pd
+import json
 from kazoo.client import KazooClient
 from datetime import datetime
-from config import model_config, ZK_HOST
+from dotenv import load_dotenv
 
-MODEL_ID_TO_NAME = {model["model_id"]: model["model_name"] for model in model_config}
-MODEL_ID_TO_REPO = {
-    model["model_id"]: model["model_repo_name"] for model in model_config
-}
+st.cache_data.clear()
+st.cache_resource.clear()
+
+load_dotenv()
+
+ZK_HOST = os.getenv("ZK_HOST")
 
 
 def setup_zk():
@@ -28,10 +32,16 @@ def remove_model(zk, path, model_id):
     try:
         full_path = f"{path}/{model_id}"
         if zk.exists(full_path):
+            # Get model name before deleting for the success message
+            data, _ = zk.get(full_path)
+            try:
+                model_data = json.loads(data.decode("utf-8"))
+                model_name = model_data.get("model_name", model_id)
+            except json.JSONDecodeError:
+                model_name = model_id
+
             zk.delete(full_path)
-            st.success(
-                f"Successfully removed model {MODEL_ID_TO_NAME.get(model_id, model_id)}"
-            )
+            st.success(f"Successfully removed model {model_name}")
             return True
     except Exception as e:
         st.error(f"Failed to remove model: {e}")
@@ -39,24 +49,38 @@ def remove_model(zk, path, model_id):
 
 
 def get_model_info(zk, path):
-    """Get model IDs and their cluster IPs from a specific path"""
+    """Get model IDs and their information from a specific path"""
     models = []
     if zk.exists(path):
         model_ids = zk.get_children(path)
         for model_id in model_ids:
             full_path = f"{path}/{model_id}"
             data, stat = zk.get(full_path)
-            models.append(
-                {
-                    "model_id": model_id,
-                    "model_name": MODEL_ID_TO_NAME.get(model_id, "Unknown Model"),
-                    "model_repo": MODEL_ID_TO_REPO.get(model_id, "Unknown Repo"),
-                    "cluster_ip": data.decode("utf-8"),
-                    "last_updated": datetime.fromtimestamp(stat.mtime / 1000).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    ),
-                }
-            )
+            try:
+                # Try to parse the JSON data
+                model_data = json.loads(data.decode("utf-8"))
+                models.append(
+                    {
+                        "model_id": model_id,
+                        "model_name": model_data.get("model_name", "Unknown Model"),
+                        "cluster_ip": model_data.get("ip", "N/A"),
+                        "last_updated": datetime.fromtimestamp(
+                            stat.mtime / 1000
+                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+            except json.JSONDecodeError:
+                # Fallback for legacy format (just IP address)
+                models.append(
+                    {
+                        "model_id": model_id,
+                        "model_name": "Unknown Model",
+                        "cluster_ip": data.decode("utf-8"),
+                        "last_updated": datetime.fromtimestamp(
+                            stat.mtime / 1000
+                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
     return models
 
 
@@ -95,19 +119,18 @@ def display_model_table(zk, models, status, path):
 
     df = pd.DataFrame(models)
 
+    # Updated column layout - removed model_repo
     for idx, row in df.iterrows():
-        col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 3, 2, 2, 1])
+        col1, col2, col3, col4, col5 = st.columns([2, 3, 2, 2, 1])
         with col1:
             st.write(row["model_name"])
         with col2:
             st.write(row["model_id"])
         with col3:
-            st.write(row["model_repo"])
-        with col4:
             st.write(row["cluster_ip"])
-        with col5:
+        with col4:
             st.write(row["last_updated"])
-        with col6:
+        with col5:
             if st.button(
                 "🗑️",
                 key=f"remove_{status}_{row['model_id']}",
@@ -121,7 +144,6 @@ def display_model_table(zk, models, status, path):
 
 def display_deployer_status(deployer_info):
     """Display the model deployer service status"""
-    # Create a container with custom styling
     container = st.container()
     container.markdown(
         """
@@ -151,10 +173,8 @@ def display_deployer_status(deployer_info):
 
     with container:
 
-        # Create three columns with better proportions
         status_col, ip_col, time_col = st.columns([1, 2, 2])
 
-        # Status indicator with improved styling
         with status_col:
             st.markdown('<p class="status-label">Status</p>', unsafe_allow_html=True)
             if deployer_info["status"] == "Active":
@@ -172,7 +192,6 @@ def display_deployer_status(deployer_info):
                     '🔴 <span class="status-value">Error</span>', unsafe_allow_html=True
                 )
 
-        # IP Address with improved styling
         with ip_col:
             st.markdown(
                 '<p class="status-label">IP Address</p>', unsafe_allow_html=True
@@ -182,7 +201,6 @@ def display_deployer_status(deployer_info):
                 f'<p class="status-value">{ip_display}</p>', unsafe_allow_html=True
             )
 
-        # Last Updated with improved styling
         with time_col:
             st.markdown(
                 '<p class="status-label">Last Updated</p>', unsafe_allow_html=True
@@ -191,8 +209,6 @@ def display_deployer_status(deployer_info):
             st.markdown(
                 f'<p class="status-value">{time_display}</p>', unsafe_allow_html=True
             )
-
-        # No closing div needed
 
 
 def main():
@@ -229,6 +245,11 @@ def main():
 
             st.markdown("---")
 
+            # Cooling Models
+            st.header("❄️ Cooling")
+            cooling_models = get_model_info(zk, "/models/cooling")
+            display_model_table(zk, cooling_models, "Cooling", "/models/cooling")
+
             # Model Details
             st.header("📊 Model Details")
             tabs = st.tabs(["All Models", "Path Explorer"])
@@ -240,6 +261,9 @@ def main():
                     all_models.append(model)
                 for model in active_models:
                     model["status"] = "Active"
+                    all_models.append(model)
+                for model in cooling_models:
+                    model["status"] = "Cooling"
                     all_models.append(model)
 
                 if all_models:
@@ -253,15 +277,12 @@ def main():
                             "model_id": st.column_config.TextColumn(
                                 "Model ID", help="UUID of the model", width="medium"
                             ),
-                            "model_repo": st.column_config.TextColumn(
-                                "Repository", help="Model repository", width="medium"
-                            ),
                             "cluster_ip": "Cluster IP",
                             "status": st.column_config.SelectboxColumn(
                                 "Status",
                                 help="Current model status",
                                 width="medium",
-                                options=["Active", "Warming"],
+                                options=["Active", "Warming", "Cooling"],
                             ),
                             "last_updated": "Last Updated",
                         },
@@ -281,8 +302,18 @@ def main():
                         for child in children:
                             full_path = f"{path_to_check}/{child}"
                             data, stat = zk.get(full_path)
-                            model_name = MODEL_ID_TO_NAME.get(child, "Unknown Model")
-                            st.code(f"{model_name} ({child}): {data.decode('utf-8')}")
+                            try:
+                                model_data = json.loads(data.decode("utf-8"))
+                                model_name = model_data.get(
+                                    "model_name", "Unknown Model"
+                                )
+                                st.code(
+                                    f"{model_name} ({child}): {json.dumps(model_data, indent=2)}"
+                                )
+                            except json.JSONDecodeError:
+                                st.code(
+                                    f"Unknown Model ({child}): {data.decode('utf-8')}"
+                                )
                     else:
                         st.warning(f"Path {path_to_check} doesn't exist")
 
